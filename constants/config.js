@@ -1,6 +1,6 @@
 
 const corsOptions = {
-    origin :[process.env.CLIENT_URL],
+    origin :'https://chattingkaro-c.vercel.app',
     methods : ["GET","POST","PUT","DELETE"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials : true
