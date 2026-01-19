@@ -1,6 +1,6 @@
 
 const corsOptions = {
-    origin :'https://www.chattingkaro.live',
+    origin :'https://www.heybuddy.live',
     methods : ["GET","POST","PUT","DELETE"],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials : true
