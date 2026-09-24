@@ -5,11 +5,13 @@ import { v2 as cloudinary } from "cloudinary";
 import { getBase64, getSockets } from "../lib/helper.js";
 // import { getSocket } from "../../client/src/socket.jsx";
 
+const isProduction = process.env.NODE_ENV?.trim().toLowerCase() === "production";
+
 const cookieOptions = {
   maxAge: 15 * 24 * 60 * 60 * 1000,
-  sameSite: "none",
+  sameSite: isProduction ? "none" : "lax",
   httpOnly: true,
-  secure: true,
+  secure: isProduction,
 };
 
 const connectDB = (uri) => {

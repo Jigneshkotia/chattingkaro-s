@@ -3,6 +3,8 @@ import { isAuthenticated } from "../middlewares/auth.js";
 import {
   addMembers,
   deleteChat,
+  createDummyChat,
+  previewDummyChat,
   getChatDetails,
   getMessages,
   getMyChats,
@@ -13,7 +15,7 @@ import {
   renameGroup,
   sendAttachments,
 } from "../controllers/chat.js";
-import { attachmentsMulter } from "../middlewares/multer.js";
+import { attachmentsMulter, dummyChatUpload } from "../middlewares/multer.js";
 import {
   addMembersValidator,
   chatIdValidator,
@@ -29,6 +31,8 @@ const app = express.Router();
 app.use(isAuthenticated);
 
 app.post("/new", newGroupValidator(), validateHandler, newGroupChat);
+app.post("/dummy/preview", dummyChatUpload, previewDummyChat);
+app.post("/dummy/create", dummyChatUpload, createDummyChat);
 app.get("/my", getMyChats);
 app.get("/my/groups", getMyGroups);
 app.put("/addmembers", addMembersValidator(), validateHandler, addMembers);

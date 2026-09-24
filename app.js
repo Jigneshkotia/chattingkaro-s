@@ -12,6 +12,10 @@ import { CHAT_JOINED, CHAT_LEAVED, NEW_MESSAGE, NEW_MESSAGES_ALERT, ONLINE_USERS
 import { v4 as uuid } from "uuid";
 import { getSockets } from "./lib/helper.js";
 import { Message } from "./models/message.js";
+import { Chat } from "./models/chat.js";
+import { User } from "./models/user.js";
+import { batchGetEmbeddings, generatePersonaResponse } from "./services/geminiService.js";
+import { queryPersonaChunks } from "./services/pineconeService.js";
 import cors from "cors";
 import { v2 as cloudinary } from "cloudinary";
 import { corsOptions } from "./constants/config.js";
@@ -100,8 +104,31 @@ io.on("connection", (socket) => {
 
     try {
       await Message.create(messageForDB);
+      const chat = await Chat.findById(chatId);
+      if (!chat?.isDummyChat) return;
+
+      const botId = chat.members.find((member) => member.toString() !== user._id.toString());
+      const bot = await User.findById(botId, "name");
+      if (!bot) return;
+      socket.emit(START_TYPING, { chatId });
+      const [queryVector, history] = await Promise.all([
+        batchGetEmbeddings([message]).then(([vector]) => vector),
+        Message.find({ chat: chatId }).sort({ createdAt: -1 }).limit(8).populate("sender", "name").lean(),
+      ]);
+      const retrievedChunks = await queryPersonaChunks(chat.dummyPersona.pineconeNamespace, queryVector);
+      const reply = await generatePersonaResponse({
+        personaName: chat.dummyPersona.name || bot.name,
+        tonePrompt: chat.dummyPersona.tonePrompt,
+        retrievedChunks,
+        conversationHistory: history.reverse(),
+        latestMessage: message,
+      });
+      const aiMessage = await Message.create({ content: reply, sender: bot._id, chat: chatId });
+      io.to(socket.id).emit(NEW_MESSAGE, { chatId, message: { ...aiMessage.toObject(), sender: { _id: bot._id, name: bot.name } } });
+      socket.emit(STOP_TYPING, { chatId });
     } catch (error) {
       console.log(error);
+      socket.emit(STOP_TYPING, { chatId });
     }
     console.log("new message", messageForRealTime);
   });

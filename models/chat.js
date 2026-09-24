@@ -16,7 +16,17 @@ const schema = new Schema({
     members:[{
         type : Types.ObjectId,
         ref : "User"
-    }]
+    }],
+    isDummyChat: { type: Boolean, default: false },
+    dummyPersona: {
+      name: String,
+      bio: String,
+      avatar: String,
+      targetSenderInChat: String,
+      tonePrompt: String,
+      pineconeNamespace: String,
+      totalChunks: { type: Number, default: 0 },
+    },
 },{
     timestamps : true
 });

@@ -31,6 +31,8 @@ const schema = new Schema(
         required: true,
       },
     },
+    isBot: { type: Boolean, default: false },
+    creator: { type: Schema.Types.ObjectId, ref: "User" },
   },
   {
     timestamps: true,

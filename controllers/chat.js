@@ -15,6 +15,10 @@ import {
 import { getOtherMember } from "../lib/helper.js";
 import { User } from "../models/user.js";
 import { Message } from "../models/message.js";
+import { parseWhatsAppChat, buildPersonaChunks } from "../utils/whatsappParser.js";
+import { analyzePersonaStyle, batchGetEmbeddings, generatePersonaResponse } from "../services/geminiService.js";
+import { deletePersonaNamespace, upsertPersonaChunks } from "../services/pineconeService.js";
+import { v4 as uuid } from "uuid";
 
 const newGroupChat = TryCatch(async (req, res, next) => {
   const { name, members } = req.body;
@@ -43,12 +47,14 @@ const getMyChats = TryCatch(async (req, res, next) => {
     "name avatar"
   );
 
-  const transformedChats = chats.map(({ _id, name, members, groupChat }) => {
+  const transformedChats = chats.map(({ _id, name, members, groupChat, isDummyChat, dummyPersona }) => {
     const otherMember = getOtherMember(members, req.user);
 
     return {
       _id,
       groupChat,
+      isDummyChat,
+      dummyPersona: isDummyChat ? dummyPersona : undefined,
       avatar: groupChat
         ? members.slice(0, 3).map(({ avatar }) => avatar.url)
         : [otherMember.avatar.url],
@@ -66,6 +72,57 @@ const getMyChats = TryCatch(async (req, res, next) => {
     success: true,
     chats: transformedChats,
   });
+});
+
+const previewDummyChat = TryCatch(async (req, res, next) => {
+  if (!req.file) return next(new ErrorHandler("Upload a WhatsApp .txt export", 400));
+  const parsed = parseWhatsAppChat(req.file.buffer.toString("utf8"));
+  if (!parsed.messageCount) return next(new ErrorHandler("No WhatsApp messages were found in this file", 400));
+  return res.status(200).json({ success: true, ...parsed });
+});
+
+const createDummyChat = TryCatch(async (req, res, next) => {
+  if (!req.file) return next(new ErrorHandler("Upload a WhatsApp .txt export", 400));
+  const { targetPersonaName, displayName, bio = "AI persona trained from a WhatsApp chat", customAvatarUrl } = req.body;
+  const parsed = parseWhatsAppChat(req.file.buffer.toString("utf8"));
+  if (!targetPersonaName || !parsed.participants.some(({ name }) => name === targetPersonaName)) return next(new ErrorHandler("Choose a participant found in the uploaded chat", 400));
+  const chunks = buildPersonaChunks(parsed.messages, targetPersonaName);
+  if (!chunks.length) return next(new ErrorHandler("Not enough messages from this person to create a persona", 400));
+
+  const personaName = displayName?.trim() || targetPersonaName;
+  const avatarUrl = customAvatarUrl?.trim() || `https://api.dicebear.com/9.x/bottts-neutral/svg?seed=${encodeURIComponent(personaName)}`;
+  const bot = await User.create({
+    name: personaName,
+    bio,
+    username: `persona_${uuid().replace(/-/g, "").slice(0, 18)}`,
+    password: uuid(),
+    avatar: { public_id: `persona-${uuid()}`, url: avatarUrl },
+    isBot: true,
+    creator: req.user,
+  });
+  const chat = await Chat.create({
+    name: personaName,
+    creator: req.user,
+    members: [req.user, bot._id],
+    isDummyChat: true,
+    dummyPersona: { name: personaName, bio, avatar: avatarUrl, targetSenderInChat: targetPersonaName, pineconeNamespace: `dummy_${uuid()}`, totalChunks: chunks.length },
+  });
+  try {
+    const [vectors, tonePrompt] = await Promise.all([
+      batchGetEmbeddings(chunks.map(({ text }) => text)),
+      analyzePersonaStyle(chunks.slice(0, 50).map(({ response }) => response), targetPersonaName),
+    ]);
+    await upsertPersonaChunks(chat.dummyPersona.pineconeNamespace, chunks, vectors);
+    chat.dummyPersona.tonePrompt = tonePrompt;
+    await chat.save();
+    const welcome = await generatePersonaResponse({ personaName, tonePrompt, latestMessage: "Start the conversation with a short, friendly WhatsApp greeting.", retrievedChunks: [] });
+    await Message.create({ content: welcome, sender: bot._id, chat: chat._id });
+  } catch (error) {
+    await Promise.all([chat.deleteOne(), bot.deleteOne()]);
+    throw error;
+  }
+  emitEvent(req, REFETCH_CHATS, [req.user]);
+  return res.status(201).json({ success: true, message: "AI persona created", chat: { _id: chat._id, name: personaName, isDummyChat: true } });
 });
 
 const getMyGroups = TryCatch(async (req, res, next) => {
@@ -358,6 +415,10 @@ const deleteChat = TryCatch(async (req, res, next) => {
     Message.deleteMany({ chat: chatId }),
   ]);
 
+  if (chat.isDummyChat) {
+    await Promise.all([deletePersonaNamespace(chat.dummyPersona?.pineconeNamespace), User.deleteOne({ _id: { $in: chat.members, $ne: req.user } })]);
+  }
+
   emitEvent(req, REFETCH_CHATS, members);
   return res.status(200).json({
     success: true,
@@ -414,4 +475,6 @@ export {
   renameGroup,
   getMessages,
   deleteChat,
+  previewDummyChat,
+  createDummyChat,
 };
